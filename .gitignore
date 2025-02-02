@@ -10,7 +10,4 @@
 local.properties
 
 # Project exclude paths
-/app/build
-/fdmonitor/build
-/fdmonitor/.cxx
 /gradle/
