@@ -26,4 +26,12 @@ object FdUtils {
         }
 
     }
+    fun getFdNum(): Int {
+        val fdFile = File("/proc/" + Process.myPid() + "/fd/")
+        // 列出目录下所有的fd情况
+        val files = fdFile.listFiles()
+        // 进程中的fd数量
+        val size = files?.size
+        return size ?: 0
+    }
 }

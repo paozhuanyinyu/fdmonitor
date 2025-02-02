@@ -6,6 +6,6 @@ import com.hook.fdmonitor.FdMonitorManager
 class MyApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-        FdMonitorManager.init(this);
+        FdMonitorManager.init(this, true);
     }
 }

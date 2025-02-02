@@ -24,6 +24,9 @@ const static char* TARGET_MODULES[] = {
 };
 const static size_t TARGET_MODULE_COUNT = sizeof(TARGET_MODULES) / sizeof(char*);
 JavaVM* gJavaVM; // 通常在 JNI_OnLoad 中初始化
+jclass clazz;
+jboolean enable_print_log;
+
 JNIEnv* GetJNIEnv() {
     JNIEnv* env = nullptr;
     if (gJavaVM->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
@@ -31,7 +34,7 @@ JNIEnv* GetJNIEnv() {
     }
     return env;
 }
-jclass clazz;
+
 
 void saveBackTrace(int fd, char *log) {
     JNIEnv* mEnv = GetJNIEnv();
@@ -51,7 +54,7 @@ void removeBackTrace(int fd) {
     mEnv->CallStaticVoidMethod(clazz, methodId, fd);
 }
 
-void split_lines(const std::string& str) {
+void print_lines(const std::string& str) {
     std::stringstream ss(str);
     std::string line;
     while (std::getline(ss, line)) {
@@ -68,7 +71,9 @@ void print_open_strace(int fd) {
     int length = strlen(log);
     LOGI("log length: %d", length);
     saveBackTrace(fd, log);
-    split_lines(log);
+    if (enable_print_log) {
+        print_lines(log);
+    }
     free(log);
 }
 
@@ -82,7 +87,9 @@ void print_close_strace(int fd) {
     int length = strlen(log);
     LOGI("log length: %d", length);
     removeBackTrace(fd);
-    split_lines(log);
+    if (enable_print_log) {
+        print_lines(log);
+    }
     free(log);
 }
 
@@ -139,7 +146,8 @@ __attribute__((constructor)) void init_hook() {
 extern "C" JNIEXPORT void JNICALL
 Java_com_hook_fdmonitor_FdMonitorManager_initMonitor(
         JNIEnv* env,
-        jclass jclazz) {
+        jclass jclazz, jboolean enablePrintLog) {
+    enable_print_log = enablePrintLog;
     init_hook();
 }
 
