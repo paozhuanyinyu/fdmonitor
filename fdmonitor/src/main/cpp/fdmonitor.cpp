@@ -68,6 +68,10 @@ void print_open_strace(int fd) {
 //    xunwind_cfi_log(pid, tid, context, SAMPLE_LOG_TAG,
 //                    SAMPLE_LOG_PRIORITY, NULL);
     char * log = xunwind_cfi_get(pid, tid, context, NULL);
+    if (log == nullptr) {
+        LOGI("strace = null, return");
+        return;
+    }
     int length = strlen(log);
     LOGI("log length: %d", length);
     saveBackTrace(fd, log);
@@ -84,6 +88,10 @@ void print_close_strace(int fd) {
 //    xunwind_cfi_log(pid, tid, context, SAMPLE_LOG_TAG,
 //                    SAMPLE_LOG_PRIORITY, NULL);
     char * log = xunwind_cfi_get(pid, tid, context, NULL);
+    if (log == nullptr) {
+        LOGI("strace = null, return");
+        return;
+    }
     int length = strlen(log);
     LOGI("log length: %d", length);
     removeBackTrace(fd);
