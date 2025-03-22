@@ -4,6 +4,12 @@
 
 # Sets the minimum CMake version required for this project.
 cmake_minimum_required(VERSION 3.22.1)
+# 设置 C++ 标准
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)  # 禁用编译器扩展（可选）
+# CMakeLists.txt
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
 
 # Declares the project name. The project name can be accessed via ${ PROJECT_NAME},
 # Since this is the top level CMakeLists.txt, the project name is also accessible
@@ -26,7 +32,10 @@ project("fdmonitor")
 # used in the AndroidManifest.xml file.
 find_package(bytehook REQUIRED CONFIG)
 find_package(xunwind REQUIRED CONFIG)
-
+add_subdirectory(${CMAKE_SOURCE_DIR}/thirtparty/libunwindstack/cmake)
+include_directories(
+        ${CMAKE_SOURCE_DIR}/thirtparty/libunwindstack/include
+)
 add_library(${CMAKE_PROJECT_NAME} SHARED
         # List C/C++ source files with relative paths to this CMakeLists.txt.
         fdmonitor.cpp)
@@ -38,6 +47,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
         # List libraries link to the target library
         android
         log
+        unwindstack
         bytehook::bytehook
         xunwind::xunwind
 )

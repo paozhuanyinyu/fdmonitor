@@ -2,9 +2,16 @@
 #include <string>
 #include "bytehook.h"
 #include "xunwind.h"
+#include "unwindstack/AndroidUnwinder.h"
+#include "unwindstack/UserArm64.h"
+#include "unwindstack/RegsGetLocal.h"
+#include "thirtparty/libunwindstack/MemoryRemote.h"
 #include <unistd.h>
 #include <android/log.h>
 #include <sstream>
+#include <unwindstack/Unwinder.h>
+#include <optional>
+#include <unwindstack/JitDebug.h>
 
 #define LOG_TAG "IO_MONITOR"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -34,7 +41,40 @@ JNIEnv* GetJNIEnv() {
     }
     return env;
 }
+static constexpr size_t MAX_UNWINDING_FRAMES = 512;
 
+void CaptureStackTrace() {
+//    unwindstack::AndroidLocalUnwinder unwinder;
+//    unwindstack::AndroidUnwinderData data;
+//    unwinder.Unwind(getpid(), data);
+//    std::string str;
+//    for (size_t i = 0; i < data.frames.size(); i++) {
+//        str += unwinder.FormatFrame(data.frames[i]) + "\n";
+//    }
+//    __android_log_print(ANDROID_LOG_INFO, "Cvm", "FormatFrame \n%s ", str.c_str());
+//
+    std::string str;
+    auto process_memory = unwindstack::Memory::CreateProcessMemory(getpid());
+    std::unique_ptr<unwindstack::Maps> maps(new unwindstack::LocalMaps());
+    std::unique_ptr<unwindstack::Regs> regs(unwindstack::Regs::CreateFromLocal());
+    unwindstack::RegsGetLocal(regs.get());
+    if (!maps->Parse()) {
+        __android_log_print(ANDROID_LOG_ERROR, "Cvm", "Failed to parse maps");
+        return;
+    }
+
+
+    unwindstack::Unwinder unwinder(512, maps.get(), regs.get(), process_memory);
+    unwinder.Unwind();
+
+    __android_log_print(ANDROID_LOG_INFO, "Cvm", "NumFrames %d ", unwinder.NumFrames());
+
+    for (size_t i = 0; i < unwinder.frames().size(); i++) {
+        str += unwinder.FormatFrame(unwinder.frames()[i]) + "\n";
+    }
+
+    __android_log_print(ANDROID_LOG_INFO, "Cvm", "FormatFrame \n%s ", str.c_str());
+}
 
 void saveBackTrace(int fd, char *log) {
     JNIEnv* mEnv = GetJNIEnv();
@@ -62,6 +102,7 @@ void print_lines(const std::string& str) {
     }
 }
 void print_open_strace(int fd) {
+    CaptureStackTrace();
     pid_t pid = getpid();
     pid_t tid = gettid();
     void *context = nullptr;
