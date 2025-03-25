@@ -32,10 +32,11 @@ project("fdmonitor")
 # used in the AndroidManifest.xml file.
 find_package(bytehook REQUIRED CONFIG)
 find_package(xunwind REQUIRED CONFIG)
-add_subdirectory(${CMAKE_SOURCE_DIR}/thirtparty/libunwindstack/cmake)
+
+add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/wechat)
 include_directories(
-        ${CMAKE_SOURCE_DIR}/thirtparty/libunwindstack/include
-)
+        ${CMAKE_SOURCE_DIR}/third_party/wechat/libwechatbacktrace/include)
+
 add_library(${CMAKE_PROJECT_NAME} SHARED
         # List C/C++ source files with relative paths to this CMakeLists.txt.
         fdmonitor.cpp)
@@ -47,7 +48,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
         # List libraries link to the target library
         android
         log
-        unwindstack
+        wechatbacktrace
         bytehook::bytehook
         xunwind::xunwind
 )

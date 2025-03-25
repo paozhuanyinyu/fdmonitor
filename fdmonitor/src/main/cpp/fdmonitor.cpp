@@ -2,16 +2,16 @@
 #include <string>
 #include "bytehook.h"
 #include "xunwind.h"
-#include "unwindstack/AndroidUnwinder.h"
-#include "unwindstack/UserArm64.h"
-#include "unwindstack/RegsGetLocal.h"
-#include "thirtparty/libunwindstack/MemoryRemote.h"
 #include <unistd.h>
 #include <android/log.h>
 #include <sstream>
-#include <unwindstack/Unwinder.h>
-#include <optional>
-#include <unwindstack/JitDebug.h>
+#include <sstream>
+#include <cxxabi.h>
+#include "Backtrace.h"
+#include "QuickenMaps.h"
+#include "LocalMaps.h"
+#include "DebugDexFiles.h"
+#include "third_party/wechat/libunwindstack/deps/android-base/include/android-base/stringprintf.h"
 
 #define LOG_TAG "IO_MONITOR"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -41,39 +41,104 @@ JNIEnv* GetJNIEnv() {
     }
     return env;
 }
-static constexpr size_t MAX_UNWINDING_FRAMES = 512;
 
-void CaptureStackTrace() {
-//    unwindstack::AndroidLocalUnwinder unwinder;
-//    unwindstack::AndroidUnwinderData data;
-//    unwinder.Unwind(getpid(), data);
-//    std::string str;
-//    for (size_t i = 0; i < data.frames.size(); i++) {
-//        str += unwinder.FormatFrame(data.frames[i]) + "\n";
-//    }
-//    __android_log_print(ANDROID_LOG_INFO, "Cvm", "FormatFrame \n%s ", str.c_str());
-//
-    std::string str;
-    auto process_memory = unwindstack::Memory::CreateProcessMemory(getpid());
-    std::unique_ptr<unwindstack::Maps> maps(new unwindstack::LocalMaps());
-    std::unique_ptr<unwindstack::Regs> regs(unwindstack::Regs::CreateFromLocal());
+#define FRAME_MAX_SIZE 128
+void dwarf_format_frame(const unwindstack::FrameData &frame, unwindstack::MapInfo *map_info,
+                        unwindstack::Elf *elf, bool is32Bit, std::string &data) {
+    if (is32Bit) {
+        data += android::base::StringPrintf("  #%02zu pc %08" PRIx64, frame.num,
+                (uint64_t) frame.rel_pc);
+    } else {
+        data += android::base::StringPrintf("  #%02zu pc %016" PRIx64, frame.num,
+                (uint64_t) frame.rel_pc);
+    }
+
+    if (frame.map_start == frame.map_end) {
+        // No valid map associated with this frame.
+        data += "  <unknown>";
+    } else if (elf != nullptr && !elf->GetSoname().empty()) {
+        data += "  " + elf->GetSoname();
+    } else if (!map_info->name.empty()) {
+        data += "  " + map_info->name;
+    } else {
+        data += android::base::StringPrintf("  <anonymous:%" PRIx64 ">", frame.map_start);
+    }
+
+    if (frame.map_elf_start_offset != 0) {
+        data += android::base::StringPrintf(" (offset 0x%" PRIx64 ")", frame.map_elf_start_offset);
+    }
+
+    if (!frame.function_name.empty()) {
+        char *demangled_name = abi::__cxa_demangle(frame.function_name.c_str(), nullptr, nullptr,
+                                                   nullptr);
+        if (demangled_name == nullptr) {
+            data += " (" + frame.function_name;
+        } else {
+            data += " (";
+            data += demangled_name;
+            free(demangled_name);
+        }
+        if (frame.function_offset != 0) {
+            data += android::base::StringPrintf("+%" PRId64, frame.function_offset);
+        }
+        data += ')';
+    }
+
+    if (map_info != nullptr) {
+        std::string build_id = map_info->GetPrintableBuildID();
+        if (!build_id.empty()) {
+            data += " (BuildId: " + build_id + ')';
+        }
+    }
+}
+void print_dwarf_unwind() {
+    std::vector<unwindstack::FrameData> frames;
+    std::shared_ptr<unwindstack::Regs> regs(unwindstack::Regs::CreateFromLocal());
     unwindstack::RegsGetLocal(regs.get());
-    if (!maps->Parse()) {
-        __android_log_print(ANDROID_LOG_ERROR, "Cvm", "Failed to parse maps");
+
+    wechat_backtrace::BACKTRACE_FUNC_WRAPPER(dwarf_unwind)(regs.get(), frames, FRAME_MAX_SIZE);
+
+
+
+    std::shared_ptr<wechat_backtrace::Maps> quicken_maps = wechat_backtrace::Maps::current();
+    if (!quicken_maps) {
+        LOGE("Err: unable to get maps.");
         return;
     }
+    auto process_memory = unwindstack::Memory::CreateProcessMemory(getpid());
+    auto jit_debug = wechat_backtrace::DebugJit::Instance();
+    auto dex_debug = wechat_backtrace::DebugDexFiles::Instance();
+    size_t num = 0;
+    for (auto p_frame = frames.begin(); p_frame != frames.end(); ++p_frame, num++) {
 
+        unwindstack::MapInfo *map_info = quicken_maps->Find(p_frame->pc);
+        unwindstack::Elf *elf = nullptr;
+        if (map_info) {
 
-    unwindstack::Unwinder unwinder(512, maps.get(), regs.get(), process_memory);
-    unwinder.Unwind();
+            if (p_frame->is_dex_pc) {
+                dex_debug->GetMethodInformation(quicken_maps.get(), map_info, p_frame->pc,
+                                                &p_frame->function_name,
+                                                &p_frame->function_offset);
+            } else {
 
-    __android_log_print(ANDROID_LOG_INFO, "Cvm", "NumFrames %d ", unwinder.NumFrames());
+                elf = map_info->GetElf(process_memory, regs->Arch());
+                elf->GetFunctionName(p_frame->rel_pc, &p_frame->function_name,
+                                     &p_frame->function_offset);
+                if (!elf->valid()) {
+                    unwindstack::Elf *jit_elf = jit_debug->GetElf(quicken_maps.get(), p_frame->pc);
+                    if (jit_elf) {
+                        jit_elf->GetFunctionName(p_frame->pc, &p_frame->function_name,
+                                                 &p_frame->function_offset);
+                    }
+                }
+            }
+        }
+        std::string formatted;
+        dwarf_format_frame(*p_frame, map_info, elf, regs->Arch() == unwindstack::ARCH_ARM,
+                           formatted);
 
-    for (size_t i = 0; i < unwinder.frames().size(); i++) {
-        str += unwinder.FormatFrame(unwinder.frames()[i]) + "\n";
+        LOGI("%s", formatted.c_str());
     }
-
-    __android_log_print(ANDROID_LOG_INFO, "Cvm", "FormatFrame \n%s ", str.c_str());
 }
 
 void saveBackTrace(int fd, char *log) {
@@ -102,7 +167,7 @@ void print_lines(const std::string& str) {
     }
 }
 void print_open_strace(int fd) {
-    CaptureStackTrace();
+    print_dwarf_unwind();
     pid_t pid = getpid();
     pid_t tid = gettid();
     void *context = nullptr;
@@ -123,6 +188,7 @@ void print_open_strace(int fd) {
 }
 
 void print_close_strace(int fd) {
+    print_dwarf_unwind();
     pid_t pid = getpid();
     pid_t tid = gettid();
     void *context = nullptr;
@@ -196,6 +262,7 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_hook_fdmonitor_FdMonitorManager_initMonitor(
         JNIEnv* env,
         jclass jclazz, jboolean enablePrintLog) {
+    print_dwarf_unwind();
     enable_print_log = enablePrintLog;
     init_hook();
 }
