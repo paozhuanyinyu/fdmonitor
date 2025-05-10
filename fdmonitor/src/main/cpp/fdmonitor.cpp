@@ -32,6 +32,10 @@ const static char* TARGET_MODULES[] = {
 const static size_t TARGET_MODULE_COUNT = sizeof(TARGET_MODULES) / sizeof(char*);
 JavaVM* gJavaVM; // 通常在 JNI_OnLoad 中初始化
 jclass clazz;
+static jclass kJavaContextClass;
+static jmethodID kMethodIDGetJavaContext;
+static jfieldID kFieldIDStack;
+static jfieldID kFieldIDThreadName;
 jboolean enable_print_log;
 
 JNIEnv* GetJNIEnv() {
@@ -41,8 +45,18 @@ JNIEnv* GetJNIEnv() {
     }
     return env;
 }
+void printTimestamp() {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
 
-#define FRAME_MAX_SIZE 128
+    struct tm tm_info;
+    localtime_r(&ts.tv_sec, &tm_info);
+
+    char buffer[64];
+    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &tm_info);
+    __android_log_print(ANDROID_LOG_INFO, "Timestamp", "%s.%03ld", buffer, ts.tv_nsec / 1000000);
+}
+#define FRAME_MAX_SIZE 32
 void dwarf_format_frame(const unwindstack::FrameData &frame, unwindstack::MapInfo *map_info,
                         unwindstack::Elf *elf, bool is32Bit, std::string &data) {
     if (is32Bit) {
@@ -109,6 +123,7 @@ void print_dwarf_unwind() {
     auto jit_debug = wechat_backtrace::DebugJit::Instance();
     auto dex_debug = wechat_backtrace::DebugDexFiles::Instance();
     size_t num = 0;
+    printTimestamp();
     for (auto p_frame = frames.begin(); p_frame != frames.end(); ++p_frame, num++) {
 
         unwindstack::MapInfo *map_info = quicken_maps->Find(p_frame->pc);
@@ -166,8 +181,33 @@ void print_lines(const std::string& str) {
         LOGI("%s", line.c_str());
     }
 }
+char *jstringToChars(JNIEnv *env, jstring jstr) {
+    if (jstr == nullptr) {
+        return nullptr;
+    }
+
+    jboolean isCopy = JNI_FALSE;
+    const char *str = env->GetStringUTFChars(jstr, &isCopy);
+    char *ret = strdup(str);
+    env->ReleaseStringUTFChars(jstr, str);
+    return ret;
+}
 void print_open_strace(int fd) {
+    JNIEnv* env = NULL;
+    gJavaVM->GetEnv((void**)&env, JNI_VERSION_1_6);
+    jobject java_context_obj = env->CallStaticObjectMethod(clazz, kMethodIDGetJavaContext);
+    if (NULL == java_context_obj) {
+        LOGE("java_context_obj == NULL");
+        return;
+    }
+    jstring j_stack = (jstring) env->GetObjectField(java_context_obj, kFieldIDStack);
+    jstring j_thread_name = (jstring) env->GetObjectField(java_context_obj, kFieldIDThreadName);
+    char* thread_name = jstringToChars(env, j_thread_name);
+    char* stack = jstringToChars(env, j_stack);
+    printTimestamp();
     print_dwarf_unwind();
+    LOGI("%s", stack);
+    printTimestamp();
     pid_t pid = getpid();
     pid_t tid = gettid();
     void *context = nullptr;
@@ -220,6 +260,7 @@ int hooked_open(const char* pathname, int flags, int mode) {
     return ret;
 }
 
+
 int hooked_close(int fd) {
     LOGI("HOOKED close: %d", fd);
     BYTEHOOK_STACK_SCOPE();
@@ -233,6 +274,10 @@ int hooked_close(int fd) {
 
 //---------------- Hook 初始化 -----------------
 __attribute__((constructor)) void init_hook() {
+    printTimestamp();
+    print_dwarf_unwind();
+    printTimestamp();
+    bytehook_set_debug(true);
     for (int i = 0; i < TARGET_MODULE_COUNT; ++i) {
         const char *so_name = TARGET_MODULES[i];
         LOGI("HOOKED so: %s", so_name);
@@ -240,7 +285,7 @@ __attribute__((constructor)) void init_hook() {
                 so_name,
                 NULL,
                 "open",
-                (void*)hooked_open,
+                (int*)hooked_open,
                 NULL,
                 NULL);
         if (stub_open == NULL) LOGE("Failed to hook open");
@@ -248,7 +293,7 @@ __attribute__((constructor)) void init_hook() {
                 so_name,
                 NULL,
                 "close",
-                (void*)hooked_close,
+                (int*)hooked_close,
                 NULL,
                 NULL);
         if (stub_close == NULL) LOGE("Failed to hook close");
@@ -262,7 +307,6 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_hook_fdmonitor_FdMonitorManager_initMonitor(
         JNIEnv* env,
         jclass jclazz, jboolean enablePrintLog) {
-    print_dwarf_unwind();
     enable_print_log = enablePrintLog;
     init_hook();
 }
@@ -276,9 +320,23 @@ JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* /* reserved */) {
     gJavaVM = vm;
     jclass jclazz = env->FindClass("com/hook/fdmonitor/FdMonitorManager");
     if(jclazz == nullptr){
-        LOGI("clazz = nullptr");
+        LOGE("clazz = nullptr");
     }
     clazz = static_cast<jclass>(env->NewGlobalRef(jclazz));
+    jclass temp_java_context_cls = env->FindClass("com/hook/fdmonitor/FdMonitorManager$JavaContext");
+    if (temp_java_context_cls == NULL)  {
+        LOGE("InitJniEnv kJavaBridgeClass NULL");
+    }
+    kJavaContextClass = reinterpret_cast<jclass>(env->NewGlobalRef(temp_java_context_cls));
+    kFieldIDStack = env->GetFieldID(kJavaContextClass, "stack", "Ljava/lang/String;");
+    kFieldIDThreadName = env->GetFieldID(kJavaContextClass, "threadName", "Ljava/lang/String;");
+    if (kFieldIDStack == NULL || kFieldIDThreadName == NULL) {
+        LOGE("InitJniEnv kJavaContextClass field NULL");
+    }
+    kMethodIDGetJavaContext = env->GetStaticMethodID(clazz, "getJavaContext", "()Lcom/hook/fdmonitor/FdMonitorManager$JavaContext;");
+    if (kMethodIDGetJavaContext == NULL) {
+        LOGE("InitJniEnv kMethodIDGetJavaContext NULL");
+    }
     return JNI_VERSION_1_6; // 返回支持的 JNI 版本
 }
 
