@@ -95,7 +95,9 @@ public class FdMonitorManager {
         }
         StringBuffer sb = new StringBuffer(stacks.size());
         for (StackTraceElement stackTraceElement : stacks) {
-            sb.append(stackTraceElement).append('\n');
+            if (!stackTraceElement.toString().contains(sPackageName)){
+                sb.append(stackTraceElement).append('\n');
+            }
         }
         return sb.toString();
     }

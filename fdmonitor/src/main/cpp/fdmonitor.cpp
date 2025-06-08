@@ -193,6 +193,29 @@ char *jstringToChars(JNIEnv *env, jstring jstr) {
     env->ReleaseStringUTFChars(jstr, str);
     return ret;
 }
+
+void print_xunwind_log(int fd) {
+    pid_t pid = getpid();
+    pid_t tid = gettid();
+    void *context = nullptr;
+//    xunwind_cfi_log(pid, tid, context, SAMPLE_LOG_TAG,
+//                    SAMPLE_LOG_PRIORITY, NULL);
+    static uintptr_t g_frames[128];
+    size_t frames_sz = xunwind_fp_unwind(g_frames, sizeof(g_frames) / sizeof(g_frames[0]),NULL);
+    char * log = xunwind_frames_get(g_frames, frames_sz, "");
+//    char * log = xunwind_cfi_get(pid, tid, context, NULL);
+    if (log == nullptr) {
+        LOGI("strace = null, return");
+        return;
+    }
+    int length = strlen(log);
+    LOGI("log length: %d", length);
+    saveBackTrace(fd, log);
+    if (enable_print_log) {
+        print_lines(log);
+    }
+    free(log);
+}
 void print_open_strace(int fd) {
     JNIEnv* env = NULL;
     gJavaVM->GetEnv((void**)&env, JNI_VERSION_1_6);
@@ -206,27 +229,14 @@ void print_open_strace(int fd) {
     char* thread_name = jstringToChars(env, j_thread_name);
     char* stack = jstringToChars(env, j_stack);
     printTimestamp();
-    print_dwarf_unwind();
+//    print_dwarf_unwind();
+    print_xunwind_log(fd);
     LOGI("%s", stack);
     printTimestamp();
-    pid_t pid = getpid();
-    pid_t tid = gettid();
-    void *context = nullptr;
-//    xunwind_cfi_log(pid, tid, context, SAMPLE_LOG_TAG,
-//                    SAMPLE_LOG_PRIORITY, NULL);
-    char * log = xunwind_cfi_get(pid, tid, context, NULL);
-    if (log == nullptr) {
-        LOGI("strace = null, return");
-        return;
-    }
-    int length = strlen(log);
-    LOGI("log length: %d", length);
-    saveBackTrace(fd, log);
-    if (enable_print_log) {
-        print_lines(log);
-    }
-    free(log);
+
 }
+
+
 
 void print_close_strace(int fd) {
     JNIEnv* env = NULL;
@@ -241,26 +251,10 @@ void print_close_strace(int fd) {
     char* thread_name = jstringToChars(env, j_thread_name);
     char* stack = jstringToChars(env, j_stack);
     printTimestamp();
-    print_dwarf_unwind();
+//    print_dwarf_unwind();
+    print_xunwind_log(fd);
     LOGI("%s", stack);
     printTimestamp();
-    pid_t pid = getpid();
-    pid_t tid = gettid();
-    void *context = nullptr;
-//    xunwind_cfi_log(pid, tid, context, SAMPLE_LOG_TAG,
-//                    SAMPLE_LOG_PRIORITY, NULL);
-    char * log = xunwind_cfi_get(pid, tid, context, NULL);
-    if (log == nullptr) {
-        LOGI("strace = null, return");
-        return;
-    }
-    int length = strlen(log);
-    LOGI("log length: %d", length);
-    removeBackTrace(fd);
-    if (enable_print_log) {
-        print_lines(log);
-    }
-    free(log);
 }
 
 //---------------- Hook 函数 -----------------
