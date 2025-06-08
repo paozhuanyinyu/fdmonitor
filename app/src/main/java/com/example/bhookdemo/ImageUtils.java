@@ -41,4 +41,16 @@ public class ImageUtils {
             return false;
         }
     }
+    public static boolean deleteImage(Context context, String fileName) {
+        try {
+            File imageFile = new File(context.getFilesDir().getAbsolutePath() + "/Bhook" + File.separator + fileName);
+            if (imageFile.exists()) {
+                return imageFile.delete();
+            }
+            return true;
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return false;
+    }
 }

@@ -23,6 +23,7 @@ static int (*original_open)(const char*, int, int);
 static ssize_t (*original_read)(int, void*, size_t);
 static ssize_t (*original_write)(int, const void*, size_t);
 static int (*original_close)(int);
+static int (*original_android_fdsan_close_with_tag)(int, uint64_t);
 
 const static char* TARGET_MODULES[] = {
         "libopenjdkjvm.so",
@@ -228,7 +229,21 @@ void print_open_strace(int fd) {
 }
 
 void print_close_strace(int fd) {
+    JNIEnv* env = NULL;
+    gJavaVM->GetEnv((void**)&env, JNI_VERSION_1_6);
+    jobject java_context_obj = env->CallStaticObjectMethod(clazz, kMethodIDGetJavaContext);
+    if (NULL == java_context_obj) {
+        LOGE("java_context_obj == NULL");
+        return;
+    }
+    jstring j_stack = (jstring) env->GetObjectField(java_context_obj, kFieldIDStack);
+    jstring j_thread_name = (jstring) env->GetObjectField(java_context_obj, kFieldIDThreadName);
+    char* thread_name = jstringToChars(env, j_thread_name);
+    char* stack = jstringToChars(env, j_stack);
+    printTimestamp();
     print_dwarf_unwind();
+    LOGI("%s", stack);
+    printTimestamp();
     pid_t pid = getpid();
     pid_t tid = gettid();
     void *context = nullptr;
@@ -271,6 +286,16 @@ int hooked_close(int fd) {
     print_close_strace(fd);
     return ret;
 }
+int hooked_android_fdsan_close_with_tag(int fd, uint64_t expected_tag) {
+    LOGI("HOOKED android_fdsan_close_with_tag: %d", fd);
+    BYTEHOOK_STACK_SCOPE();
+    // 调用原始函数
+    int ret = BYTEHOOK_CALL_PREV(*original_android_fdsan_close_with_tag, fd, expected_tag);
+    LOGI("HOOKED close ret: %d", ret);
+    // 记录堆栈
+    print_close_strace(fd);
+    return ret;
+}
 
 //---------------- Hook 初始化 -----------------
 __attribute__((constructor)) void init_hook() {
@@ -297,6 +322,14 @@ __attribute__((constructor)) void init_hook() {
                 NULL,
                 NULL);
         if (stub_close == NULL) LOGE("Failed to hook close");
+        bytehook_stub_t stub_android_fdsan_close_with_tag = bytehook_hook_single(
+                so_name,
+                NULL,
+                "android_fdsan_close_with_tag",
+                (int*) hooked_android_fdsan_close_with_tag,
+                NULL,
+                NULL);
+        if (stub_android_fdsan_close_with_tag == NULL) LOGE("Failed to hook android_fdsan_close_with_tag");
     }
     LOGI("Hooks initialized");
 }
